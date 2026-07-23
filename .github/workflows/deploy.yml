@@ -8,7 +8,9 @@ on:
 env:
   NOMAD_VERSION: 2.0.4
   NOMAD_ADDR: http://10.20.1.10:4646
-  IMAGE: ghcr.io/${{ github.repository }}
+  # nomes de imagem OCI precisam ser minúsculos — github.repository
+  # preserva a capitalização do owner (W4lff), que quebra o docker build
+  IMAGE: ghcr.io/w4lff/lab-docs
 
 jobs:
   # Build roda no runner hospedado pelo próprio GitHub — não precisa
