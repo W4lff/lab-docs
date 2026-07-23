@@ -1,0 +1,42 @@
+name: Build and deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+env:
+  NOMAD_VERSION: 2.0.4
+  NOMAD_ADDR: http://10.20.1.10:4646
+  HARBOR_REGISTRY: registry.lab.evalabs.com.br
+  IMAGE: registry.lab.evalabs.com.br/library/lab-docs
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, hashicorp-lab]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build da imagem
+        run: |
+          docker build -t ${IMAGE}:${{ github.sha }} -t ${IMAGE}:latest .
+
+      - name: Login no Harbor
+        run: |
+          echo "${{ secrets.HARBOR_PASSWORD }}" | docker login "$HARBOR_REGISTRY" -u admin --password-stdin
+
+      - name: Push da imagem
+        run: |
+          docker push ${IMAGE}:${{ github.sha }}
+          docker push ${IMAGE}:latest
+
+      - name: Instalar nomad CLI
+        run: |
+          curl -fsSL -o nomad.zip \
+            "https://releases.hashicorp.com/nomad/${NOMAD_VERSION}/nomad_${NOMAD_VERSION}_linux_amd64.zip"
+          unzip -o nomad.zip -d /usr/local/bin
+
+      - name: Deploy
+        run: |
+          nomad job validate -var="image_tag=${{ github.sha }}" lab-docs.nomad.hcl
+          nomad job run -detach -var="image_tag=${{ github.sha }}" lab-docs.nomad.hcl
