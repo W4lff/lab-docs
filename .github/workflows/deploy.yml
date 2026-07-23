@@ -8,27 +8,38 @@ on:
 env:
   NOMAD_VERSION: 2.0.4
   NOMAD_ADDR: http://10.20.1.10:4646
-  HARBOR_REGISTRY: registry.lab.evalabs.com.br
-  IMAGE: registry.lab.evalabs.com.br/library/lab-docs
+  IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
-  deploy:
-    runs-on: [self-hosted, hashicorp-lab]
+  # Build roda no runner hospedado pelo próprio GitHub — não precisa
+  # alcançar a rede privada do lab, só o ghcr.io (público, TLS válido,
+  # autenticado com o GITHUB_TOKEN automático, sem senha nenhuma pra
+  # gerenciar). Isso tira o build (CPU/tempo) do runner self-hosted, que
+  # fica só com o passo que exige de fato a rede interna: o deploy.
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build da imagem
+      - name: Login no ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build e push da imagem
         run: |
           docker build -t ${IMAGE}:${{ github.sha }} -t ${IMAGE}:latest .
-
-      - name: Login no Harbor
-        run: |
-          echo "${{ secrets.HARBOR_PASSWORD }}" | docker login "$HARBOR_REGISTRY" -u admin --password-stdin
-
-      - name: Push da imagem
-        run: |
           docker push ${IMAGE}:${{ github.sha }}
           docker push ${IMAGE}:latest
+
+  # Deploy precisa do runner self-hosted: só ele está dentro da VNet e
+  # alcança o IP privado do Nomad (10.20.1.10:4646).
+  deploy:
+    needs: build
+    runs-on: [self-hosted, hashicorp-lab]
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Instalar nomad CLI
         run: |

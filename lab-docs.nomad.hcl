@@ -20,7 +20,11 @@ job "lab-docs" {
       driver = "docker"
 
       config {
-        image        = "registry.lab.evalabs.com.br/library/lab-docs:${var.image_tag}"
+        # ghcr.io em vez do Harbor: build roda no runner hospedado pelo
+        # GitHub (ver .github/workflows/deploy.yml), então a imagem já
+        # nasce lá — TLS válido, sem precisar de insecure-registries no
+        # Docker dos workers.
+        image        = "ghcr.io/w4lff/lab-docs:${var.image_tag}"
         network_mode = "host"
       }
 
