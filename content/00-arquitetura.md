@@ -6,20 +6,26 @@ order: 0
 # Arquitetura do lab HashiCorp
 
 Este laboratório roda inteiramente na Azure (East US 2), numa única VNet
-`10.20.0.0/16` dividida em 4 sub-redes, uma por "papel":
+`10.20.0.0/16` dividida em 3 sub-redes, uma por "papel" (uma quarta,
+`registry` — 10.20.3.0/24, o Harbor — existiu e foi desligada; ver
+[Registry de imagens](09-harbor) pra essa história):
 
 | Sub-rede       | CIDR          | O que roda lá |
 |----------------|---------------|----------------|
 | `control_plane`| 10.20.1.0/24  | Consul+Nomad+Vault (servers), Keycloak, Postgres do Keycloak |
-| `data_plane`   | 10.20.2.0/24  | Consul+Nomad (clients), Traefik, forward-auth, aplicações (loja, blog, tasks-app) |
-| `registry`     | 10.20.3.0/24  | Harbor (registry de imagens Docker do lab) |
+| `data_plane`   | 10.20.2.0/24  | Consul+Nomad (clients), Traefik, forward-auth, APISIX+etcd, aplicações (loja, blog, tasks-app) |
 | `monitoring`   | 10.20.4.0/24  | Prometheus, Loki, Tempo, Grafana, Promtail, node-exporter |
+
+Imagens Docker construídas neste lab (loja, blog, tasks-api,
+tasks-front, lab-docs) vêm do **GitHub Container Registry (ghcr.io)** —
+não existe mais registry próprio dentro da VNet.
 
 ```mermaid
 flowchart TB
     subgraph Internet
         User[Usuário / navegador]
         CF[Cloudflare DNS<br/>*.lab.evalabs.com.br<br/>modo DNS-only]
+        GHCR[ghcr.io<br/>imagens Docker do lab]
     end
 
     subgraph Azure["Azure — VNet 10.20.0.0/16"]
@@ -32,12 +38,8 @@ flowchart TB
         end
 
         subgraph DP["data_plane — 10.20.2.0/24"]
-            W1[vm-worker-01<br/>Traefik, forward-auth,<br/>Keycloak, apps]
-            W2[vm-worker-02<br/>Traefik, apps]
-        end
-
-        subgraph REG["registry — 10.20.3.0/24"]
-            R1[vm-registry-01<br/>Harbor]
+            W1[vm-worker-01<br/>Traefik, forward-auth,<br/>Keycloak, APISIX+etcd, apps]
+            W2[vm-worker-02<br/>Traefik, APISIX, apps]
         end
 
         subgraph MON["monitoring — 10.20.4.0/24<br/>node pool dedicado do Nomad"]
@@ -52,8 +54,8 @@ flowchart TB
     LB --> W2
     W1 <-.->|Consul catalog<br/>service discovery| C1
     W2 <-.-> C1
-    W1 -->|pull imagens| R1
-    W2 -->|pull imagens| R1
+    W1 -->|pull imagens<br/>docker login com PAT read:packages| GHCR
+    W2 -->|pull imagens| GHCR
     W1 -.->|workload identity JWT| C1
     C1 -.->|valida via Vault| C1
     DP -->|Promtail push logs<br/>OTLP traces| M1
@@ -61,15 +63,30 @@ flowchart TB
     DP -->|Prometheus scrape| M1
 ```
 
+A rota do `tasks-api` especificamente passa por uma peça a mais — um
+API Gateway (APISIX) fazendo rate limiting antes do backend real:
+
+```mermaid
+flowchart LR
+    U[Usuário] --> T[Traefik<br/>Host+PathPrefix /api]
+    T --> A[APISIX<br/>rate limit 20req/60s]
+    A -->|descoberta via DNS do Consul<br/>tasks-api.service.consul| API[tasks-api]
+```
+
+Ver [APISIX](13-apisix) pro porquê dessa peça existir e os bugs reais
+que apareceram montando essa descoberta.
+
 ## Por que essa divisão
 
 - **Control plane isolado dos workers**: os servers de Consul/Nomad/Vault
   não rodam aplicações — só coordenam o cluster. Se um worker cair ou ficar
   sobrecarregado, o cérebro do cluster continua saudável.
-- **Registry numa VM separada**: o Harbor guarda as imagens Docker que
-  todo o resto do cluster puxa. Separar evita que um problema de disco/CPU
-  no registry derrube aplicações já rodando (elas só falam com o registry
-  no momento do deploy).
+- **Registry fora da VNet por completo**: chegou a existir uma VM
+  própria (Harbor) só pra isso — foi desligada depois de migrar pro
+  ghcr.io, que resolve o mesmo problema (guardar imagem) sem exigir
+  manter mais uma peça de infra de pé. Ver [Registry de
+  imagens](09-harbor) pra essa migração completa, incluindo um
+  vazamento de senha real que apareceu no meio do caminho.
 - **Monitoring isolado por node pool do Nomad** (não uma VM solta
   "invisível" pro Nomad): Prometheus/Loki ingerem dado o tempo todo — se
   dividissem host com as aplicações, competiriam por CPU/disco com elas.
@@ -88,7 +105,9 @@ flowchart TB
 4. **Traefik**, rodando em cada worker, recebe a requisição, olha o
    `Host` header, e decide pra qual serviço rotear — a lista de rotas vem
    dinamicamente do **Consul catalog** (provider `consulcatalog`), não de
-   arquivo estático.
+   arquivo estático. Uma rota específica (`tasks.lab.../api/*`) passa
+   primeiro pelo **APISIX** (rate limiting) antes de chegar no backend
+   real — ver [APISIX](13-apisix).
 5. Se a rota exige SSO (Vault UI, Portainer, Grafana, Nomad UI, o próprio
    dashboard do Traefik), o middleware `forward-auth` intercepta antes e
    redireciona pro **Keycloak** se não houver sessão válida.
@@ -116,9 +135,12 @@ flowchart LR
     Nomad -->|descobre serviços via| Consul
     Nomad -->|autentica tasks via workload identity em| Vault
     Traefik -->|lê rotas dinâmicas de| Consul
-    GHA[GitHub Actions<br/>self-hosted runners] -->|nomad job run| Nomad
-    GHA -->|docker push| Harbor
-    Nomad -->|pull image de| Harbor
+    APISIX -->|descoberta via DNS| Consul
+    Traefik -->|rota /api| APISIX
+    APISIX -->|rate limit + forward| Apps
+    GHAhosted[GitHub Actions<br/>runner hospedado] -->|docker build+push| GHCR[ghcr.io]
+    GHAself[GitHub Actions<br/>runner self-hosted] -->|nomad job run| Nomad
+    Nomad -->|pull image de<br/>docker login via Ansible| GHCR
     Apps -->|buscam segredo via template Nomad em| Vault
     Apps -->|registram-se em| Consul
     Prometheus -->|scrape| Consul

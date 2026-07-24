@@ -2,9 +2,10 @@
 
 Documentação didática do lab HashiCorp: uma página por ferramenta usada
 no cluster (Terraform, Ansible, Consul, Nomad, Vault, Traefik, Keycloak,
-GitHub Actions, Harbor, Cloudflare, stack de monitoramento), sempre com
-"como está configurado neste lab" **e** "como fazer manualmente" — pra
-nunca depender só da automação sem entender o que ela faz por baixo.
+GitHub Actions, registry de imagens (Harbor→ghcr.io), Cloudflare, stack
+de monitoramento, APISIX), sempre com "como está configurado neste lab"
+**e** "como fazer manualmente" — pra nunca depender só da automação sem
+entender o que ela faz por baixo.
 
 Também serve como demonstração de aplicação real instrumentada com toda
 a stack de observabilidade: métricas (`prom-client`), traces
@@ -27,4 +28,6 @@ identity (mesmo padrão de loja/blog/tasks-app).
 - `lab-docs.nomad.hcl` — `count = 2`, `distinct_hosts`, porta `8090`,
   roteado em `docs.lab.evalabs.com.br` (sem SSO — documentação é
   pública dentro do lab).
-- `.github/workflows/deploy.yml` — build, push pro Harbor, deploy.
+- `.github/workflows/deploy.yml` — dois jobs: `build` (runner hospedado
+  pelo GitHub, push pro ghcr.io) e `deploy` (runner self-hosted, único
+  que alcança a rede privada do Nomad).

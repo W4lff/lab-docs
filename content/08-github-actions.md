@@ -8,9 +8,40 @@ order: 8
 Regra do lab (a mesma citada em [Ansible](02-ansible), do outro lado):
 **só o GitHub Actions sobe/atualiza containers de aplicação.** Cada
 push em `main` de cada repo de app dispara um pipeline que builda a
-imagem, dá push pro Harbor, e roda `nomad job run`.
+imagem, dá push pro ghcr.io, e roda `nomad job run`.
 
-## Como está neste lab
+## Runner self-hosted vs runner hospedado — o híbrido
+
+Todo repo de app usa hoje **dois runners diferentes no mesmo
+pipeline**, um pra cada responsabilidade:
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest        # hospedado pelo GitHub
+    # builda e dá push pro ghcr.io — não precisa de rede privada nenhuma
+
+  deploy:
+    needs: build
+    runs-on: [self-hosted, hashicorp-lab]   # dentro da VNet
+    # só ele alcança o IP privado do Nomad (10.20.1.10:4646)
+```
+
+O motivo de dividir assim: **build não precisa de rede privada**, só
+alcançar o ghcr.io (público, TLS válido) — então roda de graça (minutos
+ilimitados em repo público, um bom volume grátis mesmo em privado) num
+runner hospedado pelo GitHub, sem consumir CPU/disco de nenhuma VM do
+lab. Só o passo de **deploy** (`nomad job run`) exige estar dentro da
+VNet, e esse continua no runner self-hosted. Isso tirou uma carga real
+do `vm-control-01`, que antes rodava os 6 runners (um por repo)
+fazendo build inteiro de cada app.
+
+Login no ghcr.io usa o `GITHUB_TOKEN` automático do próprio workflow —
+nenhum PAT próprio pra gerenciar nesse passo (diferente da era Harbor,
+que exigia uma senha guardada como secret). Ver [Registry de
+imagens](09-harbor) pra essa migração completa.
+
+## Runner self-hosted (o que ainda existe)
 
 - Um **runner self-hosted por repositório** (conta pessoal do GitHub
   não compartilha runners entre repos), rodando como container Docker
@@ -22,27 +53,10 @@ imagem, dá push pro Harbor, e roda `nomad job run`.
   token já expirado, ele não re-registra e fica offline. O `ACCESS_TOKEN`
   deixa o próprio entrypoint da imagem gerar um `RUNNER_TOKEN` novo a
   cada start, então o runner sobrevive a restarts do Docker.
-- Pipeline típico (`tasks-app` como exemplo):
-  ```yaml
-  jobs:
-    deploy:
-      runs-on: [self-hosted, hashicorp-lab]
-      steps:
-        - uses: actions/checkout@v4
-        - name: Build das imagens
-          run: docker build -t registry.lab.evalabs.com.br/library/tasks-api:${{ github.sha }} ./api
-        - name: Login no Harbor
-          run: echo "${{ secrets.HARBOR_PASSWORD }}" | docker login registry.lab.evalabs.com.br -u admin --password-stdin
-        - name: Push
-          run: docker push registry.lab.evalabs.com.br/library/tasks-api:${{ github.sha }}
-        - name: Instalar nomad CLI
-          run: curl -fsSL -o nomad.zip "https://releases.hashicorp.com/nomad/..." && unzip nomad.zip -d /usr/local/bin
-        - name: Deploy
-          run: nomad job run -detach -var="image_tag=${{ github.sha }}" api.nomad.hcl
-  ```
 - Repos que só sobem imagens **públicas** (Prometheus, Loki, Tempo,
-  Grafana, no repo `monitoring-stack`) pulam a etapa de build/push —
-  só `nomad job validate` + `nomad job run` de cada `.nomad.hcl`.
+  Grafana, no repo `monitoring-stack`) nem precisam do job `build` —
+  só `nomad job validate` + `nomad job run` de cada `.nomad.hcl`, tudo
+  no runner self-hosted mesmo.
 - `NOMAD_ADDR` aponta pro IP privado de um control-plane
   (`http://10.20.1.10:4646`) — o runner, rodando dentro da própria VNet,
   fala direto com a API do Nomad sem passar pelo Traefik.

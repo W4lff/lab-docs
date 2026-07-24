@@ -13,7 +13,8 @@ molde.
 ## O molde
 
 1. **Repositório próprio no GitHub**, um por aplicação (não um monorepo)
-   — cada um com seu próprio runner self-hosted (ver [GitHub
+   — cada um com seu próprio runner self-hosted **e** o job de build
+   rodando num runner hospedado pelo GitHub (ver [GitHub
    Actions](08-github-actions)).
 2. **Um `Dockerfile`** por serviço da aplicação (algumas têm só 1
    serviço — ex: `loja`, um site estático; outras têm vários — ex:
@@ -30,9 +31,12 @@ molde.
      nem no código.
    - Bloco `service {}` com as tags `traefik.*` que decidem o roteamento
      (ver [Traefik](06-traefik)).
-4. **Pipeline `.github/workflows/deploy.yml`**: builda a(s) imagem(ns),
-   dá push pro Harbor (ou pula essa etapa se a imagem for pública), roda
-   `nomad job run` de cada `.nomad.hcl`.
+4. **Pipeline `.github/workflows/deploy.yml`**, dois jobs: `build`
+   (runner hospedado pelo GitHub) builda a(s) imagem(ns) e dá push pro
+   **ghcr.io**; `deploy` (runner self-hosted, único que alcança a rede
+   privada) roda `nomad job run` de cada `.nomad.hcl`. Repos que só
+   sobem imagem pública (o `monitoring-stack`, por exemplo) pulam o job
+   `build` inteiro.
 
 ## Exemplo comentado (o padrão do `tasks-api`)
 
@@ -46,7 +50,7 @@ job "tasks-api" {
     task "api" {
       driver = "docker"
       config {
-        image        = "registry.lab.evalabs.com.br/library/tasks-api:${var.image_tag}"
+        image        = "ghcr.io/w4lff/tasks-api:${var.image_tag}"
         network_mode = "host"
       }
 
@@ -69,14 +73,14 @@ job "tasks-api" {
         env         = true
       }
 
+      # Sem tags de Traefik aqui: essa rota específica passa pelo
+      # APISIX (rate limiting), que descobre este serviço pelo nome via
+      # DNS do Consul — só precisa existir no catálogo, health check
+      # incluso. Ver [APISIX](13-apisix).
       service {
-        name = "tasks-api"
-        tags = [
-          "traefik.enable=true",
-          "traefik.http.routers.tasks-api.rule=Host(`tasks.lab.evalabs.com.br`) && PathPrefix(`/api`)",
-          "traefik.http.middlewares.tasks-api-stripprefix.stripprefix.prefixes=/api",
-          "traefik.http.services.tasks-api.loadbalancer.server.port=3000",
-        ]
+        name         = "tasks-api"
+        port         = "3000"
+        address_mode = "driver"
       }
     }
   }
@@ -102,6 +106,9 @@ job "tasks-api" {
 | loja (exporter nginx)| 9113  |
 | blog (exporter nginx)| 9114  |
 | lab-docs             | 8090  |
+| etcd (store do APISIX) | 2379/2380 |
+| APISIX (dados)       | 9081  |
+| APISIX (Admin API)   | 9180  |
 
 Toda porta nova precisa checar essa tabela antes de escolher um número
 — o erro mais comum ao criar uma aplicação nova neste lab é reusar uma
