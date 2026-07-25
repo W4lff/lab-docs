@@ -3,10 +3,19 @@ title: APISIX (API Gateway)
 order: 13
 ---
 
-# APISIX — API Gateway na frente do tasks-api
+# APISIX — API Gateway centralizando todas as rotas
 
-Depois de decidir controlar taxa de requisição numa API específica
-(`tasks-api`), avaliamos três ferramentas — KrakenD, Kong e APISIX — e
+Começou como rate limiting numa API específica (`tasks-api`) e depois
+virou o padrão do lab inteiro: **todo tráfego HTTP, sem exceção,
+passa pelo APISIX antes do backend real** — as 4 aplicações públicas
+(tasks-api, loja, blog, lab-docs) e as 6 ferramentas administrativas
+atrás de SSO (grafana, portainer, prometheus, keycloak, vault-ui,
+nomad-ui). O único trabalho que continua só no Traefik é o que não faz
+sentido delegar: TLS/Let's Encrypt, o roteamento por `Host()`, e o
+middleware `forward-auth` — ver a seção "SSO continua no Traefik, não
+no APISIX" mais abaixo.
+
+Avaliamos três ferramentas pra isso — KrakenD, Kong e APISIX — e
 escolhemos o **Apache APISIX**. Vale registrar o porquê, porque a
 decisão não foi só gosto.
 
@@ -37,17 +46,24 @@ decisão não foi só gosto.
 ## Arquitetura
 
 ```
-Internet → Traefik (Host + PathPrefix /api, sem mudança)
-              → APISIX (rate limit: 20 requisições / 60s por IP)
-                  → tasks-api (descoberto via DNS do Consul)
+Internet → Traefik (TLS, Host(), forward-auth quando exigido)
+              → APISIX (descoberta via DNS do Consul, rate limit só no tasks-api)
+                  → backend real
 ```
 
-Traefik continua sendo o único ponto de entrada público do lab e
-continua roteando por domínio exatamente como antes — a única mudança
-é que a tag que antes apontava direto pro `tasks-api` agora aponta pro
-`apisix`. O `tasks-api` perdeu suas próprias tags de Traefik (ver
-[Camada de aplicações](12-apps)) e mantém só o registro simples no
-Consul (nome + porta + health check), que é o que o APISIX consulta.
+Traefik continua sendo o único ponto de entrada público do lab. A
+única mudança, app por app: a tag que antes apontava direto pro
+serviço real agora aponta pro `apisix` — o serviço original perde suas
+próprias tags de Traefik e mantém só o registro simples no Consul
+(nome + porta nativa + health check), que é o que o APISIX descobre
+via DNS.
+
+Todos os 10 roteadores (`tasks-api`, `loja`, `blog`, `lab-docs`,
+`grafana`, `portainer`, `prometheus`, `keycloak`, `vault-ui`,
+`nomad-ui`) vivem como **tags de um único serviço Consul**: o próprio
+`apisix`. Isso é o que permite ao Traefik encontrar 10 rotas distintas
+apontando pro mesmo backend (porta 9081) — e foi também a origem de um
+bug real, ver abaixo.
 
 ## Como está montado
 
@@ -57,14 +73,35 @@ Consul (nome + porta + health check), que é o que o APISIX consulta.
   forward-auth: precisa de endereço estável, sem cluster de peers).
 - **APISIX**, `count = 2`, `distinct_hosts` — mesmo padrão de HA do
   resto do lab.
-- **Rota e upstream** configurados via **Admin API** depois do deploy
-  (não fazem parte do `config.yaml` do job) — um passo a mais no
-  pipeline do `stack-hashicorp-apps` que faz o `PUT` no upstream
-  (`discovery_type: dns`, `service_name: tasks-api.service.consul`) e
-  na rota (`limit-count`: 20 requisições / 60s, por IP,
-  `rejected_code: 429`).
+- **Rota e upstream de cada app** configurados via **Admin API** depois
+  do deploy (não fazem parte do `config.yaml` do job) — um passo a mais
+  no pipeline do `stack-hashicorp-apps` que faz o `PUT` num upstream por
+  app (`discovery_type: dns`, `service_name: <app>.service.consul`) e
+  numa rota por app. Só a rota do `tasks-api` tem o plugin `limit-count`
+  (20 requisições / 60s, por IP, `rejected_code: 429`) — é a única API
+  pública do lab; as demais (incluindo as 6 administrativas) não têm
+  rate limit próprio, porque já são protegidas por SSO ou já rodam rate
+  limit na própria aplicação.
 
-## O bug real: por que não é `discovery.consul` nativo
+## SSO continua no Traefik, não no APISIX
+
+As 6 rotas administrativas (grafana, portainer, prometheus, keycloak,
+vault-ui, nomad-ui) mantêm o middleware `forward-auth` **na tag do
+Traefik**, não dentro do APISIX — ou seja, o forward-auth intercepta
+*antes* de a requisição sequer chegar no APISIX. Isso foi deliberado:
+colocar autenticação dentro do gateway funcionaria, mas duplicaria uma
+peça que o Traefik já resolve bem, e a única (o `keycloak`) que
+*não* leva o middleware é o próprio provedor de SSO — não dá pra
+exigir login pra chegar na página de login.
+
+O Keycloak também está atrás do APISIX (sem rate limit — ver acima), o
+que só foi seguro fazer depois de resolver o
+[clustering real via JDBC_PING](07-keycloak-sso), porque antes disso a
+troca de código OIDC por token (uma chamada servidor-a-servidor do
+forward-auth, sem cookie de sticky session) tinha ~50% de chance de
+cair numa réplica que não conhecia aquele código.
+
+## Bug real #1: por que não é `discovery.consul` nativo
 
 O módulo `discovery.consul` do APISIX varre o **catálogo inteiro** do
 Consul pra montar seu cache — não só o serviço que alguém pediu. Duas
@@ -93,6 +130,38 @@ A solução foi trocar de mecanismo: usar a **interface DNS do Consul**
 `tasks-api.service.consul` via DNS resolve certo pro IP do node mesmo
 quando o campo de serviço está vazio — porque o servidor DNS do Consul
 já foi escrito pra lidar com esse caso, o módulo Lua do APISIX não.
+
+## Bug real #2: Traefik não linka router com service ambíguo
+
+Ao mover a 2ª, 3ª e 4ª rota (`loja`, `blog`, `lab-docs`) pro mesmo
+serviço Consul `apisix`, todas as rotas — inclusive o `tasks-api`, que
+já funcionava havia dias — começaram a devolver `404` puro do Traefik,
+sem log de erro óbvio. `curl` direto no APISIX (pulando o Traefik)
+funcionava perfeitamente; só o Traefik na frente quebrava.
+
+A causa, achada no log do próprio Traefik
+(`nomad alloc logs` no worker, não no Consul nem no APISIX):
+
+```
+ERR Router loja cannot be linked automatically with multiple Services: ["blog" "lab-docs" "loja" "tasks-api"] providerName=consulcatalog routerName=loja
+```
+
+O provider `consulcatalog` do Traefik faz o link automático
+router→service **só quando existe exatamente um** `traefik.http.services.X`
+declarado nas tags daquele registro do Consul. Com 4 (depois 10)
+serviços diferentes descritos nas tags de uma única entrada Consul
+(`apisix`), o Traefik não tem como adivinhar sozinho qual service cada
+router deveria usar — e falha *silenciosamente* pra todos, não só pro
+router novo.
+
+A correção é declarar o vínculo explicitamente, por router:
+
+```
+"traefik.http.routers.loja.service=loja",
+```
+
+Sem essa linha, o comportamento é tudo ou nada: um router a mais
+usando o padrão implícito derruba os que já funcionavam.
 
 ## Fazendo manualmente
 

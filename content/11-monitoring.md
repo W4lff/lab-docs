@@ -82,6 +82,45 @@ Ver [Nomad](04-nomad) pra entender node pools, e
   arquivo `.json` versionado no repo) — não é import manual pela UI, o
   que significa que sobrevive a qualquer redeploy.
 
+### Bug real: loop de OOM kill com 256MB
+
+O job nasceu com `memory = 256` — parecia suficiente num primeiro
+teste, mas o Grafana (imagem `latest`) já usa **~200MB parado**, sem
+tráfego nenhum, só com SQLite + todos os feature toggles habilitados
+por padrão. Margem quase zero significava que qualquer pico (um
+dashboard carregando, uma migration de schema) estourava o limite e o
+Nomad matava e reiniciava o container — de novo, e de novo. Sintoma pro
+usuário: **"Bad Gateway"** aparecendo no meio de uma sessão (Traefik
+sem backend saudável durante o restart) e painéis com **"No data"**
+(a query caiu exatamente na janela de reinício). `docker stats` e
+`docker inspect --format '{{.RestartCount}}'` confirmaram o loop.
+Corrigido subindo pra `memory = 768`.
+
+### Bug real: painel de Traces sempre "No data found in response"
+
+Mesmo com o Tempo saudável e cheio de dados (confirmado consultando a
+API dele direto), o painel de Traces do Grafana nunca mostrava nada.
+O log do Grafana explicava:
+
+```
+grpc: addrConn.createTransport failed to connect to {Addr: "127.0.0.1:3200"}.
+Err: ... "error reading server preface: http2: failed reading the frame
+payload: http2: frame too large, note that the frame header looked like
+an HTTP/1.1 header"
+```
+
+O datasource do Tempo, por padrão, tenta abrir uma conexão **gRPC**
+direto no Tempo pra fazer streaming search — só que este lab só expõe
+a porta HTTP do Tempo (`3200`), sem `grpc_listen_port` configurado no
+`server:`. Corrigido desabilitando o streaming no datasource, forçando
+a busca via HTTP normal (que já funcionava o tempo todo):
+
+```yaml
+jsonData:
+  streamingEnabled:
+    search: false
+```
+
 ## O que uma aplicação precisa fazer pra aparecer na stack
 
 1. **Métricas**: expor `/metrics` (formato Prometheus — no Node.js,

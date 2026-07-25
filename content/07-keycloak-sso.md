@@ -43,6 +43,64 @@ Traefik. Ninguém acessa essas UIs sem antes autenticar via OIDC.
   os headers `X-Forwarded-*` com dados da chamada interna, apagando o
   host/URI originais que o usuário realmente pediu.
 
+## Bug real: ~50% dos logins falhavam sem clustering de verdade
+
+Depois de habilitar HTTPS em todas as rotas (`entrypoints=web,websecure`),
+o login SSO passou a falhar de forma aleatória com
+`"Code not valid"` no forward-auth. A causa não tinha nada a ver com
+HTTPS em si:
+
+- O Keycloak roda com `count = 2` (uma réplica por worker).
+- A sticky session que já existia no Traefik
+  (`loadbalancer.sticky.cookie`) protege as chamadas do **navegador**
+  (GET `/auth`, POST `/login-actions/...`) — o cliente sempre cai na
+  mesma réplica.
+- Mas a **troca do código de autorização por token** é uma chamada
+  **servidor-a-servidor** do forward-auth direto pro Keycloak, sem
+  cookie nenhum — cai round-robin em qualquer réplica.
+- Sem cache Infinispan clusterizado entre as 2 réplicas, o código de
+  autorização gerado na réplica A simplesmente não existe pra réplica
+  B. Se a troca cair na réplica errada: `"Code not valid"`. Ao acaso,
+  ~50% das tentativas.
+
+Sticky session não resolve isso, porque a chamada vulnerável nunca
+teve cookie pra começo de conversa. A correção de verdade foi
+clusterizar o Keycloak com Infinispan de fato, usando **JDBC_PING**
+(descoberta de membros do cluster via uma tabela no próprio Postgres
+que o Keycloak já usa — sem precisar de multicast/UDP, que não existe
+entre VMs Azure em subnets diferentes):
+
+```hcl
+args = [
+  "start-dev",
+  "--http-port=8082",
+  "--cache=ispn",
+  "--cache-stack=jdbc-ping",
+]
+```
+
+Precisa também de uma faixa de porta TCP liberada entre os workers pro
+JGroups trocar estado (`7800-7850` na NSG, ver [Terraform](01-terraform)).
+Confirmação de que o cluster formou de verdade sai no log do próprio
+Keycloak:
+
+```
+ISPN000094: Received new cluster view for channel ISPN: [...] (2) [vm-worker-01-xxxx, vm-worker-02-xxxx]
+```
+
+Com "(2)" membros na view, uma réplica enxerga o código de autorização
+gerado pela outra — o `"Code not valid"` aleatório para de acontecer.
+
+Outro efeito colateral do HTTPS: o client OIDC `traefik-forward-auth`
+só tinha `http://auth.lab.evalabs.com.br/_oauth` cadastrado como
+redirect URI válido. Assim que `auth.lab.evalabs.com.br` passou a
+responder em `https://` também, o forward-auth passou a gerar o
+`redirect_uri` com `https://` — e o Keycloak rejeitava com
+`"Invalid parameter: redirect_uri"` por não bater com a lista. Corrigido
+adicionando a variante `https://` ao client via Admin API (mesmo
+princípio de `kcadm create clients` abaixo, só que num `PUT` de
+atualização).
+
 ## Fazendo manualmente
 
 Criar o realm e o client via `kcadm` (CLI administrativo do Keycloak):

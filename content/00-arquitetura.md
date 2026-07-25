@@ -12,8 +12,8 @@ Este laboratório roda inteiramente na Azure (East US 2), numa única VNet
 
 | Sub-rede       | CIDR          | O que roda lá |
 |----------------|---------------|----------------|
-| `control_plane`| 10.20.1.0/24  | Consul+Nomad+Vault (servers), Keycloak, Postgres do Keycloak |
-| `data_plane`   | 10.20.2.0/24  | Consul+Nomad (clients), Traefik, forward-auth, APISIX+etcd, aplicações (loja, blog, tasks-app) |
+| `control_plane`| 10.20.1.0/24  | Consul+Nomad+Vault (servers) |
+| `data_plane`   | 10.20.2.0/24  | Consul+Nomad (clients), Traefik, forward-auth, APISIX+etcd, Keycloak+Postgres, aplicações (loja, blog, tasks-app) |
 | `monitoring`   | 10.20.4.0/24  | Prometheus, Loki, Tempo, Grafana, Promtail, node-exporter |
 
 Imagens Docker construídas neste lab (loja, blog, tasks-api,
@@ -63,18 +63,23 @@ flowchart TB
     DP -->|Prometheus scrape| M1
 ```
 
-A rota do `tasks-api` especificamente passa por uma peça a mais — um
-API Gateway (APISIX) fazendo rate limiting antes do backend real:
+**Toda** rota do lab — as 4 aplicações públicas e as 6 ferramentas
+administrativas atrás de SSO — passa por uma peça a mais entre o
+Traefik e o backend real: um API Gateway (APISIX), descobrindo cada
+serviço via DNS do Consul:
 
 ```mermaid
 flowchart LR
-    U[Usuário] --> T[Traefik<br/>Host+PathPrefix /api]
-    T --> A[APISIX<br/>rate limit 20req/60s]
-    A -->|descoberta via DNS do Consul<br/>tasks-api.service.consul| API[tasks-api]
+    U[Usuário] --> T[Traefik<br/>TLS + Host + forward-auth se exigido]
+    T --> A[APISIX<br/>rate limit só no tasks-api]
+    A -->|descoberta via DNS do Consul<br/>app.service.consul| API[backend real]
 ```
 
-Ver [APISIX](13-apisix) pro porquê dessa peça existir e os bugs reais
-que apareceram montando essa descoberta.
+O SSO (`forward-auth`) continua sendo resolvido no Traefik, antes de
+chegar no APISIX — o gateway não sabe nada sobre autenticação, só
+descobre e encaminha. Ver [APISIX](13-apisix) pro porquê dessa peça
+existir, por que ela cobre tudo (não só uma API) e os bugs reais que
+apareceram montando essa descoberta.
 
 ## Por que essa divisão
 
@@ -95,6 +100,17 @@ que apareceram montando essa descoberta.
   `node_pool`, ficando implícitas no pool `default`) nunca são agendadas
   lá. Veja [Nomad](04-nomad) pra entender node pools.
 
+## Acesso SSH
+
+Cada VM aceita SSH direto, restrito ao IP configurado em
+`allowed_ssh_cidr` (NSG). Chegamos a montar um **bastion** (VM única
+com SSH exposto, todas as outras só aceitando conexão vinda dela) só
+pra testar o padrão — arquitetura válida pra ambiente on-premise, onde
+faz sentido ter um único ponto de entrada bem controlado pra rede
+interna. Decidimos não manter: aqui o acesso é externo mesmo (não tem
+"rede interna" separada da internet pra proteger), então a VM extra só
+rodando `sshd` 24/7 era custo sem benefício real.
+
 ## Fluxo de uma requisição
 
 1. Usuário acessa `https://algumacoisa.lab.evalabs.com.br`.
@@ -105,12 +121,12 @@ que apareceram montando essa descoberta.
 4. **Traefik**, rodando em cada worker, recebe a requisição, olha o
    `Host` header, e decide pra qual serviço rotear — a lista de rotas vem
    dinamicamente do **Consul catalog** (provider `consulcatalog`), não de
-   arquivo estático. Uma rota específica (`tasks.lab.../api/*`) passa
-   primeiro pelo **APISIX** (rate limiting) antes de chegar no backend
-   real — ver [APISIX](13-apisix).
-5. Se a rota exige SSO (Vault UI, Portainer, Grafana, Nomad UI, o próprio
-   dashboard do Traefik), o middleware `forward-auth` intercepta antes e
+   arquivo estático. Se a rota exige SSO (Vault UI, Portainer, Grafana,
+   Nomad UI, Keycloak), o middleware `forward-auth` intercepta antes e
    redireciona pro **Keycloak** se não houver sessão válida.
+5. Toda rota, sem exceção, passa em seguida pelo **APISIX** — que
+   descobre o backend real via DNS do Consul e aplica rate limiting na
+   única API pública do lab (`tasks-api`) — ver [APISIX](13-apisix).
 6. O serviço final (rodando como job Nomad) responde. Se ele precisa de
    segredo (senha de banco, chave de API), ele nunca tem a senha em texto
    — um `template` no job Nomad busca o valor do **Vault** em tempo de
@@ -136,8 +152,8 @@ flowchart LR
     Nomad -->|autentica tasks via workload identity em| Vault
     Traefik -->|lê rotas dinâmicas de| Consul
     APISIX -->|descoberta via DNS| Consul
-    Traefik -->|rota /api| APISIX
-    APISIX -->|rate limit + forward| Apps
+    Traefik -->|encaminha toda rota| APISIX
+    APISIX -->|rate limit no tasks-api + forward| Apps
     GHAhosted[GitHub Actions<br/>runner hospedado] -->|docker build+push| GHCR[ghcr.io]
     GHAself[GitHub Actions<br/>runner self-hosted] -->|nomad job run| Nomad
     Nomad -->|pull image de<br/>docker login via Ansible| GHCR
