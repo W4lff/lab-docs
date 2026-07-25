@@ -5,6 +5,22 @@ const content = document.getElementById("content");
 const searchInput = document.getElementById("search");
 const searchResults = document.getElementById("search-results");
 const vaultBanner = document.getElementById("vault-banner");
+const sidebar = document.getElementById("sidebar");
+const sidebarOverlay = document.getElementById("sidebar-overlay");
+const menuToggle = document.getElementById("menu-toggle");
+
+function closeSidebar() {
+  sidebar.classList.remove("open");
+  sidebarOverlay.classList.remove("open");
+  menuToggle.setAttribute("aria-expanded", "false");
+}
+
+menuToggle.addEventListener("click", () => {
+  const isOpen = sidebar.classList.toggle("open");
+  sidebarOverlay.classList.toggle("open", isOpen);
+  menuToggle.setAttribute("aria-expanded", String(isOpen));
+});
+sidebarOverlay.addEventListener("click", closeSidebar);
 
 async function loadVaultGreeting() {
   try {
@@ -51,6 +67,7 @@ async function loadDoc(slug) {
     a.classList.toggle("active", a.dataset.slug === slug);
   });
   window.location.hash = slug;
+  closeSidebar();
 }
 
 let searchTimer;

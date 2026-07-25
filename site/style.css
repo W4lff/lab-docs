@@ -27,6 +27,19 @@ header {
 
 header h1 { font-size: 1.1rem; margin: 0; }
 
+#menu-toggle {
+  display: none;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 1.1rem;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+}
+
+#sidebar-overlay { display: none; }
+
 .vault-banner {
   font-size: 0.8rem;
   color: var(--muted);
@@ -104,7 +117,53 @@ main blockquote {
   color: var(--muted);
 }
 main a { color: var(--accent); }
-.mermaid { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
+.mermaid { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; }
+
+/* Tabelas largas viram scroll horizontal em vez de estourar a tela —
+   sem isso, uma tabela com muitas colunas empurra o layout inteiro
+   pros lados no celular. */
+main table { display: block; overflow-x: auto; white-space: nowrap; }
+
+@media (max-width: 768px) {
+  header { padding: 0.75rem 1rem; gap: 0.6rem; }
+  header h1 { font-size: 0.95rem; }
+  .vault-banner { font-size: 0.7rem; padding: 0.2rem 0.5rem; }
+
+  #menu-toggle { display: inline-block; }
+
+  .layout { position: relative; }
+
+  /* Sidebar vira painel off-canvas: fica fora da tela até o usuário
+     abrir pelo botão de menu, em vez de dividir a largura com o
+     conteúdo (o que sobraria ilegível num celular). */
+  #sidebar {
+    position: fixed;
+    top: 0;
+    left: -85%;
+    width: 85%;
+    max-width: 320px;
+    height: 100%;
+    background: var(--bg);
+    z-index: 100;
+    transition: left 0.2s ease;
+    box-shadow: 2px 0 12px rgba(0, 0, 0, 0.3);
+  }
+  #sidebar.open { left: 0; }
+
+  #sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 90;
+  }
+  #sidebar-overlay.open { display: block; }
+
+  main {
+    padding: 1rem 1.2rem;
+    max-width: 100%;
+  }
+}
 
 @media (prefers-color-scheme: light) {
   :root {

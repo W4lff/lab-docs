@@ -9,11 +9,13 @@
 </head>
 <body>
   <header>
+    <button id="menu-toggle" aria-label="Abrir menu" aria-expanded="false">☰</button>
     <h1>📚 Lab HashiCorp — Documentação</h1>
     <div id="vault-banner" class="vault-banner">carregando saudação do Vault…</div>
   </header>
 
   <div class="layout">
+    <div id="sidebar-overlay"></div>
     <nav id="sidebar">
       <input id="search" type="search" placeholder="Buscar no conteúdo…" />
       <ul id="doc-list"></ul>
