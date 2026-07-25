@@ -1,0 +1,4 @@
+# Falso positivo real, não segredo: exemplo didático em content/09-harbor.md
+# mostrando o comando usado pra rotacionar uma senha vazada, com
+# placeholders (SENHA_ANTIGA/SENHA_NOVA), não uma credencial de verdade.
+content/09-harbor.md:curl-auth-user:124
