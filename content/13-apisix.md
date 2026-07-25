@@ -12,7 +12,7 @@ passa pelo APISIX antes do backend real** — as 4 aplicações públicas
 atrás de SSO (grafana, portainer, prometheus, keycloak, vault-ui,
 nomad-ui). O único trabalho que continua só no Traefik é o que não faz
 sentido delegar: TLS/Let's Encrypt, o roteamento por `Host()`, e o
-middleware `forward-auth` — ver a seção "SSO continua no Traefik, não
+middleware de SSO (oauth2-proxy) — ver a seção "SSO continua no Traefik, não
 no APISIX" mais abaixo.
 
 Avaliamos três ferramentas pra isso — KrakenD, Kong e APISIX — e
@@ -46,7 +46,7 @@ decisão não foi só gosto.
 ## Arquitetura
 
 ```
-Internet → Traefik (TLS, Host(), forward-auth quando exigido)
+Internet → Traefik (TLS, Host(), oauth2-proxy quando exigido)
               → APISIX (descoberta via DNS do Consul, rate limit só no tasks-api)
                   → backend real
 ```
@@ -70,7 +70,7 @@ bug real, ver abaixo.
 - **etcd** — store de configuração do APISIX (rotas/upstreams/plugins
   vivem lá, não em arquivo estático — dá pra mudar via Admin API sem
   reiniciar nada). Um nó só, fixo num worker conhecido (mesmo padrão do
-  forward-auth: precisa de endereço estável, sem cluster de peers).
+  oauth2-proxy: precisa de endereço estável, sem cluster de peers).
 - **APISIX**, `count = 2`, `distinct_hosts` — mesmo padrão de HA do
   resto do lab.
 - **Rota e upstream de cada app** configurados via **Admin API** depois
@@ -86,8 +86,8 @@ bug real, ver abaixo.
 ## SSO continua no Traefik, não no APISIX
 
 As 6 rotas administrativas (grafana, portainer, prometheus, keycloak,
-vault-ui, nomad-ui) mantêm o middleware `forward-auth` **na tag do
-Traefik**, não dentro do APISIX — ou seja, o forward-auth intercepta
+vault-ui, nomad-ui) mantêm o middleware do oauth2-proxy **na tag do
+Traefik**, não dentro do APISIX — ou seja, o oauth2-proxy intercepta
 *antes* de a requisição sequer chegar no APISIX. Isso foi deliberado:
 colocar autenticação dentro do gateway funcionaria, mas duplicaria uma
 peça que o Traefik já resolve bem, e a única (o `keycloak`) que
