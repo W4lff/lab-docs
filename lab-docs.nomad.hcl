@@ -48,16 +48,13 @@ job "lab-docs" {
         destination = "local/vault-data.json"
       }
 
+      # Sem tags de Traefik: essa rota agora passa pelo APISIX (ver
+      # stack-hashicorp-apps/apisix.nomad.hcl), que descobre este
+      # serviço via DNS do Consul.
       service {
         name         = "lab-docs"
         port         = "8090"
         address_mode = "driver"
-        tags = [
-          "traefik.enable=true",
-          "traefik.http.routers.lab-docs.rule=Host(`docs.lab.evalabs.com.br`)",
-          "traefik.http.routers.lab-docs.entrypoints=web",
-          "traefik.http.services.lab-docs.loadbalancer.server.port=8090",
-        ]
 
         check {
           type         = "http"
