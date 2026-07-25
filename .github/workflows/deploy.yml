@@ -8,32 +8,20 @@ on:
 env:
   NOMAD_VERSION: 2.0.4
   NOMAD_ADDR: http://10.20.1.10:4646
-  # nomes de imagem OCI precisam ser minúsculos — github.repository
-  # preserva a capitalização do owner (W4lff), que quebra o docker build
-  IMAGE: ghcr.io/w4lff/lab-docs
 
 jobs:
-  # Build roda no runner hospedado pelo próprio GitHub — não precisa
-  # alcançar a rede privada do lab, só o ghcr.io (público, TLS válido,
-  # autenticado com o GITHUB_TOKEN automático, sem senha nenhuma pra
-  # gerenciar). Isso tira o build (CPU/tempo) do runner self-hosted, que
-  # fica só com o passo que exige de fato a rede interna: o deploy.
   build:
-    runs-on: ubuntu-latest
+    uses: W4lff/gh-actions-templates/.github/workflows/devsecops-build.yml@main
+    with:
+      name: lab-docs
+      image: ghcr.io/w4lff/lab-docs
+      context: .
+      node: true
     permissions:
       contents: read
       packages: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Login no ghcr.io
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Build e push da imagem
-        run: |
-          docker build -t ${IMAGE}:${{ github.sha }} -t ${IMAGE}:latest .
-          docker push ${IMAGE}:${{ github.sha }}
-          docker push ${IMAGE}:latest
+      security-events: write
+    secrets: inherit
 
   # Deploy precisa do runner self-hosted: só ele está dentro da VNet e
   # alcança o IP privado do Nomad (10.20.1.10:4646).
@@ -51,5 +39,5 @@ jobs:
 
       - name: Deploy
         run: |
-          nomad job validate -var="image_tag=${{ github.sha }}" lab-docs.nomad.hcl
-          nomad job run -detach -var="image_tag=${{ github.sha }}" lab-docs.nomad.hcl
+          nomad job validate -var="image_tag=${{ needs.build.outputs.image_tag }}" lab-docs.nomad.hcl
+          nomad job run -detach -var="image_tag=${{ needs.build.outputs.image_tag }}" lab-docs.nomad.hcl

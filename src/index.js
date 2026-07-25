@@ -126,4 +126,9 @@ app.get("/api/search", (req, res) => {
 
 app.use(express.static(SITE_DIR));
 
-app.listen(PORT, () => log(`lab-docs ouvindo na porta ${PORT}`));
+// Guard pra permitir `require("./index")` em teste sem abrir porta.
+if (require.main === module) {
+  app.listen(PORT, () => log(`lab-docs ouvindo na porta ${PORT}`));
+}
+
+module.exports = { app };

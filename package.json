@@ -5,15 +5,21 @@
   "type": "commonjs",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "c8 --reporter=text --reporter=html node --test test/"
   },
   "dependencies": {
     "express": "^4.19.2",
     "marked": "^12.0.2",
     "prom-client": "^15.1.3",
     "@opentelemetry/api": "^1.9.0",
-    "@opentelemetry/sdk-node": "^0.55.0",
-    "@opentelemetry/auto-instrumentations-node": "^0.50.0",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.55.0"
+    "@opentelemetry/sdk-node": "^0.221.0",
+    "@opentelemetry/instrumentation-http": "^0.221.0",
+    "@opentelemetry/instrumentation-express": "^0.69.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.221.0"
+  },
+  "devDependencies": {
+    "c8": "^12.0.0",
+    "supertest": "^7.0.0"
   }
 }
