@@ -141,6 +141,41 @@ Correção: criar um client scope chamado `groups`, colocar o mapper
 esse scope como *default* no client `oauth2-proxy` (não *optional* —
 senão precisaria ser pedido explicitamente de novo em algum lugar).
 
+## Bug real: Keycloak se anunciava como `http://`, quebrava no celular
+
+Sintoma: `curl` conseguia logar de ponta a ponta sem problema nenhum,
+mas num navegador de verdade (Safari no iOS, pior ainda em aba
+anônima) a tela de login do Keycloak carregava normal, o formulário era
+preenchido, mas ao apertar "Sign In" nada acontecia — sem erro visível,
+só travado.
+
+Causa: o listener do Keycloak é HTTP puro (`KC_HTTP_ENABLED=true`,
+sem TLS — quem faz HTTPS é o Traefik na frente). Sem configuração
+explícita de hostname, o Keycloak reporta a si mesmo (issuer, toda URL
+que ele gera, inclusive a própria tela de login) usando o esquema que
+*ele* enxerga — `http://`, nunca `https://`, mesmo o usuário tendo
+chegado via `https://grafana.lab.evalabs.com.br`. `curl` não liga pra
+isso (segue redirect de https pra http sem reclamar); um navegador de
+verdade trata isso como downgrade de segurança no meio de um fluxo de
+login e trava ou se recusa a completar — mais agressivo ainda em modo
+privado.
+
+Correção:
+
+```hcl
+KC_HOSTNAME      = "https://keycloak.lab.evalabs.com.br"
+KC_PROXY_HEADERS = "xforwarded"
+```
+
+`KC_HOSTNAME` fixa a URL pública real (esquema incluso); `KC_PROXY_HEADERS`
+manda o Keycloak confiar no `X-Forwarded-Proto` que o Traefik já envia,
+sabendo que a chamada original foi `https` mesmo o listener interno
+sendo HTTP. Efeito colateral esperado: o `issuer` no discovery document
+do Keycloak passa a ser `https://...` — qualquer client OIDC apontando
+pra esse issuer com `http://` (era o caso do oauth2-proxy, contornando
+o comportamento antigo) precisa ser atualizado junto, senão quebra com
+o erro oposto (`issuer did not match`, ver bug acima).
+
 ## RBAC por grupo (dev / devops)
 
 Substituímos o forward-auth pelo **oauth2-proxy** especificamente
