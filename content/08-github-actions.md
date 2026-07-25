@@ -8,7 +8,11 @@ order: 8
 Regra do lab (a mesma citada em [Ansible](02-ansible), do outro lado):
 **só o GitHub Actions sobe/atualiza containers de aplicação.** Cada
 push em `main` de cada repo de app dispara um pipeline que builda a
-imagem, dá push pro ghcr.io, e roda `nomad job run`.
+imagem, dá push pro ghcr.io, e roda `nomad job run`. O passo de build
+em si não é mais escrito à mão em cada repo — todos chamam o mesmo
+workflow reusável, com uma esteira completa de segurança no meio do
+caminho. Ver [Esteira DevSecOps](14-devsecops) pro que ela faz e os
+bugs reais que apareceram montando ela.
 
 ## Runner self-hosted vs runner hospedado — o híbrido
 
