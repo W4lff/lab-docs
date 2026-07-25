@@ -23,6 +23,13 @@ jobs:
       security-events: write
     secrets: inherit
 
+  tag:
+    needs: build
+    uses: W4lff/gh-actions-templates/.github/workflows/semantic-tag.yml@main
+    permissions:
+      contents: write
+      models: read
+
   # Deploy precisa do runner self-hosted: só ele está dentro da VNet e
   # alcança o IP privado do Nomad (10.20.1.10:4646).
   deploy:
