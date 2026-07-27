@@ -85,7 +85,10 @@ az vm create -g rg-lab -n vm-worker-01 \
   --public-ip-sku Standard
 ```
 
-Pra Load Balancer manual (o pedaço mais tedioso à mão):
+Pra Load Balancer manual (o pedaço mais tedioso à mão — o Azure LB em
+si não roda mais no lab hoje, foi substituído por uma VM de HAProxy
+como exercício de aprendizado, ver [Arquitetura](00-arquitetura); o
+exercício abaixo continua valendo pra entender o primitivo da Azure):
 
 ```bash
 az network public-ip create -g rg-lab -n pip-lb --sku Standard
